@@ -4,11 +4,9 @@ services:
   web:
     build: .
     ports:
-      - "8080:80"
-    volumes:
-      - ./:/var/www/html
-      - ./users.json:/var/www/html/users.json
-      - ./error.log:/var/www/html/error.log
+      - "80:80"
     environment:
       - BOT_TOKEN=${BOT_TOKEN}
-    restart: unless-stopped
+      - RENDER_URL=${RENDER_URL}
+    volumes:
+      - ./:/var/www/html
