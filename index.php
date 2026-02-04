@@ -1,51 +1,14 @@
 <?php
-// Bot configuration - Use environment variable for Render.com
-define('BOT_TOKEN', getenv('BOT_TOKEN') ?: 'Place_Your_Token_Here');
+// Bot configuration
+define('BOT_TOKEN', getenv('BOT_TOKEN'));
 define('API_URL', 'https://api.telegram.org/bot' . BOT_TOKEN . '/');
-define('WEBHOOK_URL', getenv('RENDER_EXTERNAL_URL') ?: 'https://your-app-name.onrender.com');
 define('USERS_FILE', 'users.json');
 define('ERROR_LOG', 'error.log');
-
-// Set timezone
-date_default_timezone_set('UTC');
 
 // Error logging
 function logError($message) {
     $timestamp = date('Y-m-d H:i:s');
     file_put_contents(ERROR_LOG, "[$timestamp] $message\n", FILE_APPEND);
-    error_log($message); // Also log to PHP error log
-}
-
-// Initialize webhook
-function setWebhook() {
-    try {
-        $url = API_URL . 'setWebhook?url=' . urlencode(WEBHOOK_URL);
-        $result = file_get_contents($url);
-        $response = json_decode($result, true);
-        
-        if ($response['ok']) {
-            logError("Webhook set successfully: " . WEBHOOK_URL);
-            return true;
-        } else {
-            logError("Failed to set webhook: " . $response['description']);
-            return false;
-        }
-    } catch (Exception $e) {
-        logError("Webhook initialization failed: " . $e->getMessage());
-        return false;
-    }
-}
-
-// Delete webhook (for maintenance)
-function deleteWebhook() {
-    try {
-        $url = API_URL . 'deleteWebhook';
-        file_get_contents($url);
-        return true;
-    } catch (Exception $e) {
-        logError("Delete webhook failed: " . $e->getMessage());
-        return false;
-    }
 }
 
 // Data management
@@ -86,40 +49,12 @@ function sendMessage($chat_id, $text, $keyboard = null) {
             ]);
         }
         
-        $url = API_URL . 'sendMessage';
-        $ch = curl_init();
-        curl_setopt($ch, CURLOPT_URL, $url);
-        curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, $params);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
-        $result = curl_exec($ch);
-        curl_close($ch);
-        
-        return $result !== false;
+        $url = API_URL . 'sendMessage?' . http_build_query($params);
+        file_get_contents($url);
+        return true;
     } catch (Exception $e) {
         logError("Send message failed: " . $e->getMessage());
         return false;
-    }
-}
-
-// Answer callback query (to remove "loading" state)
-function answerCallbackQuery($callback_query_id) {
-    try {
-        $params = [
-            'callback_query_id' => $callback_query_id
-        ];
-        
-        $url = API_URL . 'answerCallbackQuery';
-        $ch = curl_init();
-        curl_setopt($ch, CURLOPT_URL, $url);
-        curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, $params);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_exec($ch);
-        curl_close($ch);
-    } catch (Exception $e) {
-        logError("Answer callback failed: " . $e->getMessage());
     }
 }
 
@@ -137,8 +72,9 @@ function processUpdate($update) {
     $users = loadUsers();
     
     if (isset($update['message'])) {
-        $chat_id = $update['message']['chat']['id'];
-        $text = trim($update['message']['text'] ?? '');
+        $message = $update['message'];
+        $chat_id = $message['chat']['id'];
+        $text = trim($message['text'] ?? '');
         
         // Create new user if doesn't exist
         if (!isset($users[$chat_id])) {
@@ -158,7 +94,7 @@ function processUpdate($update) {
                     if ($user['ref_code'] === $ref && $id != $chat_id) {
                         $users[$chat_id]['referred_by'] = $id;
                         $users[$id]['referrals']++;
-                        $users[$id]['balance'] += 50; // Referral bonus
+                        $users[$id]['balance'] += 50;
                         sendMessage($id, "🎉 New referral! +50 points bonus!");
                         break;
                     }
@@ -170,13 +106,9 @@ function processUpdate($update) {
         }
         
     } elseif (isset($update['callback_query'])) {
-        $callback_query = $update['callback_query'];
-        $chat_id = $callback_query['message']['chat']['id'];
-        $data = $callback_query['data'];
-        $callback_id = $callback_query['id'];
-        
-        // Answer callback query immediately
-        answerCallbackQuery($callback_id);
+        $callback = $update['callback_query'];
+        $chat_id = $callback['message']['chat']['id'];
+        $data = $callback['data'];
         
         if (!isset($users[$chat_id])) {
             $users[$chat_id] = [
@@ -219,7 +151,7 @@ function processUpdate($update) {
                 break;
                 
             case 'referrals':
-                $msg = "👥 Referral System\nYour code: <b>{$users[$chat_id]['ref_code']}</b>\nReferrals: {$users[$chat_id]['referrals']}\nInvite link: https://t.me/" . explode(':', BOT_TOKEN)[0] . "?start={$users[$chat_id]['ref_code']}\n50 points per referral!";
+                $msg = "👥 Referral System\nYour code: <b>{$users[$chat_id]['ref_code']}</b>\nReferrals: {$users[$chat_id]['referrals']}\nInvite link: t.me/" . BOT_TOKEN . "?start={$users[$chat_id]['ref_code']}\n50 points per referral!";
                 break;
                 
             case 'withdraw':
@@ -230,7 +162,6 @@ function processUpdate($update) {
                     $amount = $users[$chat_id]['balance'];
                     $users[$chat_id]['balance'] = 0;
                     $msg = "🏧 Withdrawal of $amount points requested!\nOur team will process it soon.";
-                    // Add actual withdrawal processing here
                 }
                 break;
                 
@@ -239,80 +170,26 @@ function processUpdate($update) {
                 break;
         }
         
-        // Edit the original message with new content
-        try {
-            $params = [
-                'chat_id' => $chat_id,
-                'message_id' => $callback_query['message']['message_id'],
-                'text' => $msg,
-                'parse_mode' => 'HTML',
-                'reply_markup' => json_encode(['inline_keyboard' => getMainKeyboard()])
-            ];
-            
-            $url = API_URL . 'editMessageText';
-            $ch = curl_init();
-            curl_setopt($ch, CURLOPT_URL, $url);
-            curl_setopt($ch, CURLOPT_POST, true);
-            curl_setopt($ch, CURLOPT_POSTFIELDS, $params);
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-            curl_exec($ch);
-            curl_close($ch);
-        } catch (Exception $e) {
-            // If edit fails, send new message
-            sendMessage($chat_id, $msg, getMainKeyboard());
-        }
+        sendMessage($chat_id, $msg, getMainKeyboard());
     }
     
     saveUsers($users);
 }
 
-// Handle webhook request
-function handleWebhook() {
-    // Get the input data
-    $input = file_get_contents('php://input');
-    
-    if (empty($input)) {
-        // If no input, check if it's a setup request
-        if (isset($_GET['setup'])) {
-            if (setWebhook()) {
-                echo "Webhook set successfully!";
-            } else {
-                echo "Failed to set webhook";
-            }
-        } elseif (isset($_GET['delete'])) {
-            if (deleteWebhook()) {
-                echo "Webhook deleted successfully!";
-            } else {
-                echo "Failed to delete webhook";
-            }
-        } else {
-            echo "Bot is running!";
-        }
-        return;
-    }
-    
-    // Decode the update
-    $update = json_decode($input, true);
-    
-    if ($update) {
-        // Process the update
-        processUpdate($update);
-        
-        // Send OK response to Telegram
-        http_response_code(200);
-        echo 'OK';
-    } else {
-        http_response_code(400);
-        echo 'Invalid update';
-    }
-}
+// Webhook handler
+$content = file_get_contents("php://input");
+$update = json_decode($content, true);
 
-// Start the webhook handler
-try {
-    handleWebhook();
-} catch (Exception $e) {
-    logError("Fatal error: " . $e->getMessage());
-    http_response_code(500);
-    echo 'Internal server error';
+if ($update) {
+    processUpdate($update);
+} else {
+    // Webhook setup verification
+    if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+        $render_url = getenv('RENDER_URL');
+        echo "Bot is running! Set webhook using this URL:\n";
+        echo $render_url . "/webhook\n\n";
+        echo "Use this command to set webhook:\n";
+        echo "curl -X GET " . API_URL . "setWebhook?url=" . urlencode($render_url . "/webhook");
+    }
 }
 ?>
